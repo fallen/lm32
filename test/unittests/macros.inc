@@ -72,6 +72,16 @@ _\name:
 992:
 .endm
 
+.macro check_noexcp
+	be r25, r0, 991f
+	tc_fail
+	bi 992f
+991:
+	tc_pass
+992:
+	mv r25, r0
+.endm
+
 .macro check_csr csr val
 	mvhi r13, hi(\val)
 	ori r13, r13, lo(\val)

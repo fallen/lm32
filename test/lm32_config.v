@@ -38,6 +38,8 @@
 
 // Enable MMU
 `define CFG_MMU_ENABLED
+`define CFG_MMU_WITH_ASID
+`define CFG_MMU_ASID_WIDTH	5
 
 `define CLOG2 $clog2
 

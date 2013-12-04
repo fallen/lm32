@@ -789,6 +789,9 @@ reg ext_break_r;
 `endif
 
 `ifdef CFG_MMU_ENABLED
+`ifdef CFG_MMU_WITH_ASID
+reg [(`CFG_MMU_ASID_WIDTH-1):0] current_asid;   // Current ASID used by the CPU
+`endif
 reg itlbe;                                      // Instruction TLB enable
 reg dtlbe;                                      // Data TLB enable
 reg usr;                                        // User mode
@@ -803,9 +806,15 @@ reg busr;                                       // Breakpoint user mode
 
 reg itlb_invalidate;                            // Invalidate an ITLB entry
 reg itlb_flush;                                 // Flush all ITLB entries
+`ifdef CFG_MMU_WITH_ASID
+reg itlb_flush_asid;                                 // Flush ITLB entries matching a specific ASID
+`endif
 reg itlb_update;                                // Update an ITLB entry
 reg dtlb_invalidate;                            // Invalidate a DTLB entry
 reg dtlb_flush;                                 // Flush all DTLB entries
+`ifdef CFG_MMU_WITH_ASID
+reg dtlb_flush_asid;                                 // Flush DTLB entries matching a specific ASID
+`endif
 reg dtlb_update;                                // Update an DTLB entry
 reg [`LM32_WORD_RNG] tlbpaddr;                  // TLBPADDR CSR
 reg [`LM32_WORD_RNG] tlbvaddr;                  // TLBVADDR CSR
@@ -1073,6 +1082,10 @@ lm32_load_store_unit #(
     .tlbvaddr               (tlbvaddr),
     .dtlb_update            (dtlb_update),
     .dtlb_flush             (dtlb_flush),
+`ifdef CFG_MMU_WITH_ASID
+    .dtlb_flush_asid        (dtlb_flush_asid),
+    .current_asid           (current_asid),
+`endif
     .dtlb_invalidate        (dtlb_invalidate),
 `endif
     // From Wishbone
@@ -2230,7 +2243,13 @@ assign cfg2 = {
 
 `ifdef CFG_MMU_ENABLED
 assign psw = {
+`ifdef CFG_MMU_WITH_ASID
+	      {(`LM32_WORD_WIDTH-12-`CFG_MMU_ASID_WIDTH){1'b0}},
+	      current_asid,
+`else
               {`LM32_WORD_WIDTH-12{1'b0}},
+`endif
+
 `ifdef CFG_DEBUG_ENABLED
               busr,
 `else
@@ -2328,6 +2347,9 @@ always @(posedge clk_i `CFG_RESET_SENSITIVITY)
 begin
     if (rst_i)
     begin
+`ifdef CFG_MMU_WITH_ASID
+        current_asid <= `CFG_MMU_ASID_WIDTH'd0;
+`endif
         itlbe <= `FALSE;
         eitlbe <= `FALSE;
         dtlbe <= `FALSE;
@@ -2411,6 +2433,9 @@ begin
                     bdtlbe <= operand_1_x[8];
                     busr   <= operand_1_x[11];
 `endif
+`ifdef CFG_MMU_WITH_ASID
+                    current_asid <= operand_1_x[(`CFG_MMU_ASID_WIDTH - 1 + 12):12];
+`endif
                 end
             end
         end
@@ -2427,6 +2452,10 @@ begin
         dtlb_flush <= `FALSE;
         dtlb_invalidate <= `FALSE;
         tlbvaddr <= {`LM32_WORD_WIDTH{1'b0}};
+`ifdef CFG_MMU_WITH_ASID
+        itlb_flush_asid <= `FALSE;
+        dtlb_flush_asid <= `FALSE;
+`endif
     end
     else
     begin
@@ -2434,6 +2463,10 @@ begin
         itlb_invalidate <= `FALSE;
         dtlb_flush <= `FALSE;
         dtlb_invalidate <= `FALSE;
+`ifdef CFG_MMU_WITH_ASID
+        itlb_flush_asid <= `FALSE;
+        dtlb_flush_asid <= `FALSE;
+`endif
         if (stall_x == `FALSE)
         begin
             if (dtlb_exception == `TRUE)
@@ -2446,15 +2479,21 @@ begin
                 if (operand_1_x[0] == 1'b0)
                 begin
                     case (operand_1_x[`LM32_TLB_OP_RNG])
-                    `LM32_TLB_OP_FLUSH:      itlb_flush <= `TRUE;
-                    `LM32_TLB_OP_INVALIDATE: itlb_invalidate <= `TRUE;
+                    `LM32_TLB_OP_FLUSH:           itlb_flush <= `TRUE;
+`ifdef CFG_MMU_WITH_ASID
+                    `LM32_TLB_OP_FLUSH_ASID:      itlb_flush_asid <= `TRUE;
+`endif
+                    `LM32_TLB_OP_INVALIDATE:      itlb_invalidate <= `TRUE;
                     endcase
                 end
                 if (operand_1_x[0] == 1'b1)
                 begin
                     case (operand_1_x[`LM32_TLB_OP_RNG])
-                    `LM32_TLB_OP_FLUSH:      dtlb_flush <= `TRUE;
-                    `LM32_TLB_OP_INVALIDATE: dtlb_invalidate <= `TRUE;
+                    `LM32_TLB_OP_FLUSH:           dtlb_flush <= `TRUE;
+`ifdef CFG_MMU_WITH_ASID
+                    `LM32_TLB_OP_FLUSH_ASID:      dtlb_flush_asid <= `TRUE;
+`endif
+                    `LM32_TLB_OP_INVALIDATE:      dtlb_invalidate <= `TRUE;
                     endcase
                 end
             end
@@ -3108,13 +3147,22 @@ end
 // synthesis translate_off
 
 // Reset register 0. Only needed for simulation.
+
+integer i;
+
 initial
 begin
 `ifdef LM32_EBR_REGISTER_FILE
-    reg_0.mem[0] = {`LM32_WORD_WIDTH{1'b0}};
-    reg_1.mem[0] = {`LM32_WORD_WIDTH{1'b0}};
+for (i = 0 ; i < 32 ; i = i + 1)
+begin
+    reg_0.mem[i] = {`LM32_WORD_WIDTH{1'b0}};
+    reg_1.mem[i] = {`LM32_WORD_WIDTH{1'b0}};
+end
 `else
-    registers[0] = {`LM32_WORD_WIDTH{1'b0}};
+for (i = 0 ; i < 32 ; i = i + 1)
+begin
+    registers[i] = {`LM32_WORD_WIDTH{1'b0}};
+end
 `endif
 end
 

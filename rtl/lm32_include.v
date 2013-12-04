@@ -265,6 +265,29 @@
 `define LM32_TLB_OP_NOOP                2'h0
 `define LM32_TLB_OP_FLUSH               2'h1
 `define LM32_TLB_OP_INVALIDATE          2'h2
+`ifdef CFG_MMU_WITH_ASID
+`define LM32_TLB_OP_FLUSH_ASID          2'h3
+`endif
+
+`ifndef CFG_MMU_ENABLED
+`ifdef CFG_MMU_WITH_ASID
+$display("ERROR: you enabled ASID but not the MMU, enabling the MMU by default...");
+`define CFG_MMU_ENABLED
+`endif
+`endif
+
+`ifndef CFG_MMU_ASID_WIDTH
+`ifdef CFG_MMU_WITH_ASID
+$display("ERROR: you enabled MMU with ASID but did not chose the ASID width");
+$display("ERROR: selecting width of 5 by default");
+`define CFG_MMU_ASID_WIDTH             5
+`endif
+`endif
+
+// if no ASID, size is 0
+`ifndef CFG_MMU_WITH_ASID
+`define CFG_MMU_ASID_WIDTH             0
+`endif
 
 // Exception IDs
 `define LM32_EID_WIDTH                  4

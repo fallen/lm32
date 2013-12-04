@@ -104,6 +104,10 @@ module lm32_load_store_unit (
     tlbvaddr,
     dtlb_update,
     dtlb_flush,
+`ifdef CFG_MMU_WITH_ASID
+    dtlb_flush_asid,
+    current_asid,
+`endif
     dtlb_invalidate,
 `endif
     // From Wishbone
@@ -204,6 +208,10 @@ input [`LM32_WORD_RNG] tlbpaddr;                        // TLBPADDR CSR
 input [`LM32_WORD_RNG] tlbvaddr;                        // TLBVADDR CSR
 input dtlb_update;                                      // Data TLB update
 input dtlb_flush;                                       // Data TLB flush
+`ifdef CFG_MMU_WITH_ASID
+input dtlb_flush_asid;                                       // Data TLB flush of specific ASID lines
+input [(`CFG_MMU_ASID_WIDTH-1):0] current_asid;              // Current ASID the CPU is using
+`endif
 input dtlb_invalidate;                                  // Data TLB invalidate
 `endif
 
@@ -450,6 +458,10 @@ lm32_dtlb dtlb (
     .tlbvaddr               (tlbvaddr),
     .update                 (dtlb_update),
     .flush                  (dtlb_flush),
+`ifdef CFG_MMU_WITH_ASID
+    .asid_flush             (dtlb_flush_asid),
+    .current_asid           (current_asid),
+`endif
     .invalidate             (dtlb_invalidate),
     // ----- Outputs -----
     .physical_load_store_address_m (physical_load_store_address_m),

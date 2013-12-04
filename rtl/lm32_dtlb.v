@@ -33,18 +33,31 @@
 
 `ifdef CFG_MMU_ENABLED
 
-`define LM32_DTLB_STATE_RNG                 1:0
-`define LM32_DTLB_STATE_CHECK               2'b01
-`define LM32_DTLB_STATE_FLUSH               2'b10
+`ifdef CFG_MMU_WITH_ASID
+`define LM32_DTLB_STATE_WIDTH               4
+`else
+`define LM32_DTLB_STATE_WIDTH               2
+`endif
+`define LM32_DTLB_STATE_RNG                 (`LM32_DTLB_STATE_WIDTH-1):0
+`define LM32_DTLB_STATE_CHECK               `LM32_DTLB_STATE_WIDTH'h1
+`define LM32_DTLB_STATE_FLUSH               `LM32_DTLB_STATE_WIDTH'h2
+`ifdef CFG_MMU_WITH_ASID
+`define LM32_DTLB_STATE_ASID_FLUSH_READ     `LM32_DTLB_STATE_WIDTH'h3
+`define LM32_DTLB_STATE_ASID_FLUSH_WRITE    `LM32_DTLB_STATE_WIDTH'h4
+`endif
 
 `define LM32_DTLB_OFFSET_RNG                offset_msb:offset_lsb
 `define LM32_DTLB_IDX_RNG                   index_msb:index_lsb
 `define LM32_DTLB_VPFN_RNG                  vpfn_msb:vpfn_lsb
 `define LM32_DTLB_TAG_RNG                   tag_msb:tag_lsb
 `define LM32_DTLB_ADDR_RNG                  (index_width-1):0
-`define LM32_DTLB_DATA_WIDTH                (vpfn_width+tag_width+3)  // +3 for valid, ci, ro
+// CFG_MMU_ASID_WIDTH == 0 if CFG_MMU_WITH_ASID == `FALSE
+`define LM32_DTLB_DATA_WIDTH                (`CFG_MMU_ASID_WIDTH + vpfn_width + tag_width + 3)  // +3 for valid, ci, ro
 `define LM32_DTLB_DATA_RNG                  (`LM32_DTLB_DATA_WIDTH-1):0
 
+`ifdef CFG_MMU_WITH_ASID
+`define LM32_DTLB_ASID_RNG                  asid_msb:asid_lsb
+`endif
 
 /////////////////////////////////////////////////////
 // Module interface
@@ -69,6 +82,10 @@ module lm32_dtlb (
     tlbvaddr,
     update,
     flush,
+`ifdef CFG_MMU_WITH_ASID
+    asid_flush,
+    current_asid,
+`endif
     invalidate,
     // ----- Outputs -----
     physical_load_store_address_m,
@@ -90,6 +107,10 @@ localparam offset_width = `CLOG2(page_size);
 localparam index_width = `CLOG2(entries);
 localparam offset_lsb = 0;
 localparam offset_msb = (offset_lsb+offset_width-1);
+`ifdef CFG_MMU_WITH_ASID
+localparam asid_lsb = 7;
+localparam asid_msb = asid_lsb + `CFG_MMU_ASID_WIDTH - 1;
+`endif
 localparam index_lsb = (offset_msb+1);
 localparam index_msb = (index_lsb+index_width-1);
 localparam tag_lsb = (index_msb+1);
@@ -124,6 +145,10 @@ input [`LM32_WORD_RNG] tlbpaddr;
 input [`LM32_WORD_RNG] tlbvaddr;
 input update;
 input flush;
+`ifdef CFG_MMU_WITH_ASID
+input asid_flush;
+input [(`CFG_MMU_ASID_WIDTH-1):0] current_asid;
+`endif
 input invalidate;
 
 /////////////////////////////////////////////////////
@@ -154,18 +179,25 @@ wire [`LM32_DTLB_DATA_RNG] tlbe;
 wire [`LM32_DTLB_DATA_RNG] tlbe_inval;
 wire [`LM32_DTLB_TAG_RNG] tlbe_tag_x;
 wire [`LM32_DTLB_VPFN_RNG] tlbe_pfn_x;
+`ifdef CFG_MMU_WITH_ASID
+wire [`LM32_DTLB_ASID_RNG] tlbe_asid_x;
+wire [`LM32_DTLB_ASID_RNG] asid_to_flush;
+`endif
 wire tlbe_valid_x;
 wire tlbe_ro_x;
 wire tlbe_ci_x;
 wire checking;
-wire flushing;
+wire entire_tlb_flushing;
 wire write_port_enable;
+wire asid_flushing;
 
 reg [`LM32_DTLB_STATE_RNG] state;                         // Current state of FSM
 reg [`LM32_DTLB_ADDR_RNG] flush_set;
 reg [`LM32_DTLB_VPFN_RNG] tlbe_pfn_m;
 reg lookup;
-
+`ifdef CFG_MMU_WITH_ASID
+reg asid_flush_we;
+`endif
 
 /////////////////////////////////////////////////////
 // Functions
@@ -194,38 +226,67 @@ lm32_ram
      .write_enable (write_port_enable),
      .write_data (write_data),
      // ----- Outputs -------
-     .read_data ({tlbe_pfn_x, tlbe_tag_x, tlbe_ci_x, tlbe_ro_x, tlbe_valid_x})
+     .read_data (
+        {
+`ifdef CFG_MMU_WITH_ASID
+          tlbe_asid_x,
+`endif
+          tlbe_pfn_x, tlbe_tag_x, tlbe_ci_x, tlbe_ro_x, tlbe_valid_x
+        }
+     )
      );
 
 /////////////////////////////////////////////////////
 // Combinational logic
 /////////////////////////////////////////////////////
 
+// Use this trick to prevent from
+// putting ifdef all over the place
+
+assign asid_flushing =
+`ifdef CFG_MMU_WITH_ASID
+(state == `LM32_DTLB_STATE_ASID_FLUSH_READ) || (state == `LM32_DTLB_STATE_ASID_FLUSH_WRITE);
+`else
+0;
+`endif
+
 // Compute address to use to index into the DTLB data memory
 assign read_address = address_x[`LM32_DTLB_IDX_RNG];
 
 // tlb_update_address will receive data from a CSR register
-assign write_address = (flushing == `TRUE)
+assign write_address = ((entire_tlb_flushing == `TRUE) || (asid_flushing))
                             ? flush_set
                             : tlbvaddr[`LM32_DTLB_IDX_RNG];
 
-assign write_port_enable = (update == `TRUE) || (invalidate == `TRUE) || (flushing == `TRUE);
+assign write_port_enable = (update == `TRUE) || (invalidate == `TRUE) || (entire_tlb_flushing == `TRUE)
+`ifdef CFG_MMU_WITH_ASID
+                           || ((asid_flushing == `TRUE) && (asid_flush_we == `TRUE))
+`endif
+                          ;
 
 assign physical_load_store_address_m = (enable == `FALSE)
                 ? address_m
                 : {tlbe_pfn_m, address_m[`LM32_DTLB_OFFSET_RNG]};
 
 assign tlbe = {
+`ifdef CFG_MMU_WITH_ASID
+        tlbvaddr[`LM32_DTLB_ASID_RNG],     // ASID
+`endif
         tlbpaddr[`LM32_DTLB_VPFN_RNG],     // pfn
         tlbvaddr[`LM32_DTLB_TAG_RNG],      // tag
         tlbpaddr[2],                       // cache inhibit
         tlbpaddr[1],                       // read only
         `TRUE};                            // valid
 assign tlbe_inval = {{`LM32_DTLB_DATA_WIDTH-1{1'b0}}, `FALSE};
-assign write_data = ((invalidate == `TRUE) || (flushing)) ? tlbe_inval : tlbe;
+assign write_data = (invalidate == `TRUE) || (entire_tlb_flushing == `TRUE) || (asid_flushing == `TRUE) ? tlbe_inval : tlbe;
 
 
+`ifdef CFG_MMU_WITH_ASID
+assign asid_to_flush = tlbvaddr[`LM32_DTLB_ASID_RNG];
+assign tlbe_match = ({tlbe_asid_x, tlbe_tag_x, tlbe_valid_x} == {current_asid, address_x[`LM32_DTLB_TAG_RNG], `TRUE});
+`else
 assign tlbe_match = ({tlbe_tag_x, tlbe_valid_x} == {address_x[`LM32_DTLB_TAG_RNG], `TRUE});
+`endif
 
 assign miss_vfn = {address_x[`LM32_DTLB_VPFN_RNG], {offset_width{1'b0}}};
 assign miss_x = ((enable == `TRUE) && ((load_q_x == `TRUE) || (store_q_x == `TRUE)) && (tlbe_match == `FALSE) && (lookup == `FALSE));
@@ -233,8 +294,8 @@ assign cache_inhibit_x = ((enable == `TRUE) && (tlbe_ci_x == `TRUE));
 assign fault_x = ((enable == `TRUE) && (store_q_x == `TRUE) && (tlbe_match == `TRUE) && (tlbe_ro_x == `TRUE));
 
 assign checking = state[0];
-assign flushing = state[1];
-assign stall_request = (flushing == `TRUE) || (lookup == `TRUE);
+assign entire_tlb_flushing = state[1];
+assign stall_request = (entire_tlb_flushing == `TRUE) || (lookup == `TRUE) || (asid_flushing == `TRUE);
 
 /////////////////////////////////////////////////////
 // Sequential logic
@@ -269,6 +330,9 @@ begin
     begin
         flush_set <= {index_width{1'b1}};
         state <= `LM32_DTLB_STATE_FLUSH;
+`ifdef CFG_MMU_WITH_ASID
+        asid_flush_we <= `FALSE;
+`endif
     end
     else
     begin
@@ -280,6 +344,13 @@ begin
                 flush_set <= {index_width{1'b1}};
                 state <= `LM32_DTLB_STATE_FLUSH;
             end
+`ifdef CFG_MMU_WITH_ASID
+            else if (asid_flush == `TRUE)
+            begin
+                flush_set <= {index_width{1'b1}};
+                state <= `LM32_DTLB_STATE_ASID_FLUSH_READ;
+            end
+`endif
         end
 
         `LM32_DTLB_STATE_FLUSH:
@@ -288,6 +359,29 @@ begin
                 state <= `LM32_DTLB_STATE_CHECK;
             flush_set <= flush_set - 1'b1;
         end
+
+`ifdef CFG_MMU_WITH_ASID
+        `LM32_DTLB_STATE_ASID_FLUSH_READ:
+        begin
+            if (tlbe_asid_x == asid_to_flush)
+                asid_flush_we <= 1;
+            state <= `LM32_DTLB_STATE_ASID_FLUSH_WRITE;
+        end
+
+        `LM32_DTLB_STATE_ASID_FLUSH_WRITE:
+        begin
+            if (flush_set == {index_width{1'b0}})
+            begin
+                state <= `LM32_DTLB_STATE_CHECK;
+            end
+            else
+            begin
+                flush_set <= flush_set - 1'b1;
+                state <= `LM32_DTLB_STATE_ASID_FLUSH_READ;
+            end
+            asid_flush_we <= 0;
+        end
+`endif
 
         endcase
     end

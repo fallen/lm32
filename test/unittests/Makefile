@@ -84,6 +84,7 @@ TESTCASES += test_xori.elf
 TESTCASES += test_mmu_nop1.elf
 TESTCASES += test_mmu_nop2.elf
 TESTCASES += test_mmu_nop3.elf
+TESTCASES += test_mmu_eret.elf
 
 all: build
 
@@ -105,8 +106,14 @@ test_mmu_nop3.S: test_mmu.S
 %.elf: %.o macros.inc $(CRT)
 	$(LD) $(LDFLAGS) $(NOSTDFLAGS) $(CRT) $< -o $@
 
+test_mmu_eret.elf: test_mmu_eret.o macros.inc crt2.o
+	$(LD) $(LDFLAGS) $(NOSTDFLAGS) crt2.o test_mmu_eret.o -o $@
+
 %.vh: %.elf
-	$(OBJCOPY) -O verilog $< $@
+	@$(OBJCOPY) -O binary $< $@.tmp
+	@hexdump -Cv $@.tmp | awk 'BEGIN { FS=" " } ; { for (i = 2 ; i < 18 ; i++) { printf "%s ",$$i } ; print " " }' > $@
+	@$(RM) $@.tmp
+
 
 build: $(CRT) $(TESTCASES) $(TESTCASES:.elf=.vh)
 
@@ -119,7 +126,7 @@ check: $(TESTCASES:.elf=.vh)
 
 check_%: test_%.vh
 	@$(MAKE) -C .. tb_lm32_system
-	vvp ../tb_lm32_system +prog=$<
+	vvp ../tb_lm32_system +prog=$< $(VVP_EXTRA_ARGS)
 
 clean:
 	$(RM) $(TESTCASES) $(TESTCASES:.elf=.vh) $(CRT) *nop?.S tb_lm32.vcd

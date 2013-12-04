@@ -1,5 +1,19 @@
 .include "macros.inc"
 
+.macro check_psw val
+	rcsr r5, PSW
+	calli disable_dtlb
+	calli disable_itlb
+	mvhi r13, hi(\val)
+	ori r13, r13, lo(\val)
+	be r5, r13, 991f
+	tc_fail
+	bi 992f
+991:
+	tc_pass
+992:
+.endm
+
 initial_page:
 start
 
@@ -41,14 +55,69 @@ test_name MMU_DTLB_ASID_MATCH_0
 test_name MMU_DTLB_ASID_MATCH_NOEXCP
     check_noexcp
 
+
+test_name MMU_DTLB_ASID_MATCH_PSW_0
+    xor r3, r3, r3
+    calli flush_dtlb
+    calli update_dtlb_with_asid_5
+    calli set_asid_5
+    calli enable_dtlb
+1:
+    lw r3, (r1+0)
+    check_psw 0x5040 # this reads PSW and disables DTLB and ITLB
+    calli update_dtlb
+    calli set_asid_0
+
+test_name MMU_DTLB_ASID_MATCH_PSW_1
+    check_r3 0xdeadbabe
+
+test_name MMU_DTLB_ASID_MATCH_PSW_2
+    check_noexcp
+
+
+test_name MMU_DTLB_ASID_MISMATCH_PSW_1
+    xor r3, r3, r3
+    calli flush_dtlb
+    calli update_dtlb_with_asid_5
+    calli enable_dtlb
+    lw r3, (r1+0)
+1:
+    check_psw 0xc0 # this reads PSW and disables DTLB and ITLB
+    calli update_dtlb
+
+test_name MMU_DTLB_ASID_MISMATCH_PSW_2
+    check_excp 256
+
+test_name MMU_DTLB_ASID_MISMATCH_PSW_3
+    check_reg ea 1b
+
+test_name MMU_DTLB_ASID_MISMATCH_PSW_4
+    xor r3, r3, r3
+    ori r3, r3, 1
+    wcsr IE, r3
+    xor r3, r3, r3
+    calli flush_dtlb
+    calli update_dtlb_with_asid_5
+    calli enable_dtlb
+    lw r3, (r1+0)
+1:
+    check_psw 0xc3 # this reads PSW and disables DTLB and ITLB
+    calli update_dtlb
+
+test_name MMU_DTLB_ASID_MISMATCH_PSW_5
+    check_excp 256
+
+test_name MMU_DTLB_ASID_MISMATCH_PSW_6
+    check_reg ea 1b
+
 test_name MMU_DTLB_ASID_MISSMATCH
     xor r3, r3, r3
     calli flush_dtlb
     calli update_dtlb_with_asid_5
     calli set_asid_0
     calli enable_dtlb
-1:
     lw r3, (r1+0)
+1:
     calli disable_dtlb
     calli update_dtlb
     check_excp 256
@@ -67,8 +136,8 @@ test_name MMU_DTLB_ASID_MISSMATCH_2
     ori		r5, r5, lo(0xFFFE0FFF)
     and		r4, r4, r5
     wcsr	PSW, r4 # set current ASID back to 0 right before doing the load
-1:
     lw r3, (r1+0)
+1:
     calli disable_dtlb
     calli update_dtlb
     calli set_asid_0
@@ -84,8 +153,8 @@ test_name MMU_DTLB_ASID_FLUSH_ASID_5
     calli set_asid_5
     calli enable_dtlb
     calli flush_dtlb_asid_5
-1:
     lw r3, (r1+0)
+1:
     calli disable_dtlb
     calli update_dtlb
     calli set_asid_0
@@ -97,8 +166,8 @@ test_name MMU_DTLB_ASID_FLUSH_ASID_5_1
 test_name MMU_DTLB_ASID_MISS_0
     calli set_asid_5
     calli enable_dtlb
-1:
     lb r3, (r1+0x3fff)
+1:
     calli disable_dtlb
     calli set_asid_0
     check_excp 256
@@ -111,8 +180,8 @@ test_name MMU_DTLB_ASID_MISS_2
 
 test_name MMU_DTLB_MISS_1
     calli enable_dtlb
-1:
     lb r3, (r1+0x1fff)
+1:
     calli disable_dtlb
     check_excp 256
 
@@ -178,8 +247,8 @@ test_name MMU_DTLB_FAULT_1
 
 test_name MMU_DTLB_FAULT_2
     calli enable_dtlb
-1:
     sw (r1+0), r0
+1:
     calli disable_dtlb
     check_excp 512
 
@@ -258,6 +327,7 @@ test_name MMU_DTLB_INV
     lw r3, (r1+0)
     calli disable_dtlb
     check_excp 256
+
 
 # make sure we have a mapping for the current code
 mvhi r1, hi(initial_page)
@@ -462,7 +532,7 @@ update_dtlb_with_asid_5:
     ori r11, r2, 1
     mvhi r5, hi(0xFFFFF07F)
     ori r5, r5, lo(0xFFFFF07F)
-    and r10, r5, r10
+    and	r10, r5, r10
     ori r10, r10, 0x280 # ASID 5
     wcsr TLBVADDR, r10
     wcsr TLBPADDR, r11
@@ -500,20 +570,20 @@ flush_icache:
     ret
 
 set_asid_5:
-    rcsr        r4, PSW
-    mvhi        r5, hi(0xFFFE0FFF)
-    ori         r5, r5, lo(0xFFFE0FFF)
-    and         r4, r4, r5
-    ori         r4, r4, 0x5000
-    wcsr        PSW, r4
+    rcsr	r4, PSW
+    mvhi	r5, hi(0xFFFE0FFF)
+    ori		r5, r5, lo(0xFFFE0FFF)
+    and		r4, r4, r5
+    ori		r4, r4, 0x5000
+    wcsr	PSW, r4
     ret
 
 set_asid_0:
-    rcsr        r4, PSW
-    mvhi        r5, hi(0xFFFE0FFF)
-    ori         r5, r5, lo(0xFFFE0FFF)
-    and         r4, r4, r5
-    wcsr        PSW, r4
+    rcsr	r4, PSW
+    mvhi	r5, hi(0xFFFE0FFF)
+    ori		r5, r5, lo(0xFFFE0FFF)
+    and		r4, r4, r5
+    wcsr	PSW, r4
     ret
 
 flush_dtlb_asid_5:
