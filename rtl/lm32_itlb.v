@@ -152,6 +152,7 @@ reg [`LM32_ITLB_ADDR_RNG] flush_set;
 wire [`LM32_ITLB_TAG_RNG] tlbe_tag_f;
 wire [`LM32_ITLB_VPFN_RNG] tlbe_pfn_f;
 wire tlbe_valid_f;
+wire flushing;
 
 reg miss_d;
 
